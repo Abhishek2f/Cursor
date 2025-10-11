@@ -9,9 +9,14 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@langchain/community": "^0.3.56",
+    "@langchain/community": "^0.3.57",
+    "@langchain/google-genai": "^0.2.18",
     "@supabase/supabase-js": "^2.57.4",
+    "cheerio": "^1.1.2",
+    "critters": "^0.0.23",
     "dotenv": "^17.2.2",
+    "isomorphic-fetch": "^3.0.0",
+    "langchain": "^0.3.35",
     "next": "15.5.3",
     "react": "19.1.0",
     "react-dom": "19.1.0"
