@@ -1,12 +1,10 @@
 /**
- * SummarizerService - Handles repository summarization using Transformers.js
+ * SummarizerService - Handles repository summarization using GitHub API and README parsing
  * Includes built-in GitHub API probes (stars, license, homepage, latest_version, languages, README, manifests).
- * Keep SOLID: the model-based summarization is isolated; probes are helpers in the same module for convenience.
+ * Uses intelligent README parsing and GitHub metadata for summarization - no AI models required.
  */
 
-const SUMMARIZATION_MODEL = 'Xenova/distilbart-cnn-6-6';
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || ''; // optional but recommended
-const DEFAULT_OLLAMA_MODEL = 'llama3.2:3b-instruct'; // unused here; kept for future parity
 
 /* -------------------------------------------------------------------------- */
 /*                               GitHub helpers                               */
@@ -721,23 +719,10 @@ function isGibberish(text) {
 /* -------------------------------------------------------------------------- */
 
 export class SummarizerService {
-  /** @type {import('@huggingface/transformers').Pipeline | null} */
-  #summarizer = null;
-
-  async #getSummarizer() {
-    if (!this.#summarizer) {
-      const { pipeline } = await import('@huggingface/transformers');
-      try {
-        this.#summarizer = await pipeline('summarization', SUMMARIZATION_MODEL, { dtype: 'q8' });
-      } catch {
-        this.#summarizer = await pipeline('summarization', SUMMARIZATION_MODEL);
-      }
-    }
-    return this.#summarizer;
-  }
+  // No AI clients needed - uses only GitHub API and README parsing
 
   /**
-   * Summarize README + extract structured info using optional repo hints.
+   * Summarize README + extract structured info using GitHub API data and intelligent parsing.
    * @param {string} readmeText
    * @param {Object=} repoHints - GitHub API data and metadata
    * @returns {Promise<{githubSummary:string, cool_facts:string[], tools_used:string[], website_url:string}>}
@@ -749,35 +734,8 @@ export class SummarizerService {
 
     const cleaned = stripBadges(readmeText);
 
-    // Model summary with graceful fallback and gibberish detection
-    let githubSummary = '';
-    try {
-      const summarizer = await this.#getSummarizer();
-      // Use more content for better summarization but still limit for AI model
-      const truncated = smartTruncate(cleaned, 12000);
-      const out = await summarizer(truncated, {
-        max_length: 250,
-        min_length: 60,
-        do_sample: false,
-        clean_up_tokenization_spaces: true,
-      });
-      const text = Array.isArray(out) ? out[0]?.summary_text : out?.summary_text;
-      githubSummary = (text || '').trim();
-
-      // Check if the AI output is gibberish and force fallback if so
-      if (isGibberish(githubSummary)) {
-        console.warn('AI summarization produced gibberish, using fallback');
-        githubSummary = generateFallbackSummary(cleaned, repoHints);
-      }
-    } catch (error) {
-      console.error('AI summarization failed:', error);
-      githubSummary = generateFallbackSummary(cleaned, repoHints);
-    }
-
-    // Final fallback if we still don't have a good summary
-    if (!githubSummary || githubSummary.length < 50 || isGibberish(githubSummary)) {
-      githubSummary = generateFallbackSummary(cleaned, repoHints);
-    }
+    // Generate intelligent summary using GitHub metadata and README parsing
+    const githubSummary = generateFallbackSummary(cleaned, repoHints);
 
     // Enhanced extraction using GitHub API data (use full content for extraction)
     const cool_facts = extractCoolFacts(cleaned, repoHints);
@@ -875,8 +833,8 @@ export class SummarizerService {
     };
   }
 
-  getModelName() { return SUMMARIZATION_MODEL; }
-  dispose() { this.#summarizer = null; }
+  getModelName() { return 'GitHub API + README Parsing'; }
+  dispose() { /* No resources to dispose */ }
 }
 
 export const summarizerService = new SummarizerService();
