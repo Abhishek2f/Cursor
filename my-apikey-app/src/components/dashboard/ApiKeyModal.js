@@ -7,7 +7,10 @@ export default function ApiKeyModal({ isOpen, onClose, onSubmit, editingKey }) {
 
   useEffect(() => {
     if (editingKey) {
-      setFormData({ name: editingKey.name, description: editingKey.description });
+      setFormData({ 
+        name: editingKey.name || '', 
+        description: editingKey.description || '' 
+      });
     } else {
       setFormData({ name: '', description: '' });
     }
@@ -22,7 +25,7 @@ export default function ApiKeyModal({ isOpen, onClose, onSubmit, editingKey }) {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center min-h-screen pt-20 z-50">
       <div className="bg-white rounded-lg p-6 w-full max-w-md mx-4">
         <h3 className="text-lg font-semibold text-gray-900 mb-4">
           {editingKey ? 'Edit API Key' : 'Create New API Key'}

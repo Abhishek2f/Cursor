@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { apiKeysService, isSupabaseConfigured } from '@/lib/supabase';
+import { useSession } from 'next-auth/react';
 
 const generateApiKey = () => {
   return 'kvp-' + Math.random().toString(36).substr(2, 32);
@@ -10,49 +10,67 @@ const generateApiKey = () => {
 export function useApiKeys(showToast) {
   const [apiKeys, setApiKeys] = useState([]);
   const [loading, setLoading] = useState(true);
+  const { data: session, status } = useSession();
 
   const loadApiKeys = useCallback(async () => {
     setLoading(true);
     try {
-      if (!isSupabaseConfigured()) {
-        console.log('Supabase not configured, using localStorage');
+      // If user is not authenticated, use localStorage fallback
+      if (status === 'unauthenticated' || !session) {
+        console.log('User not authenticated, using localStorage');
         const stored = localStorage.getItem('apiKeys');
         setApiKeys(stored ? JSON.parse(stored) : []);
         return;
       }
 
-      const keys = await apiKeysService.getApiKeys();
-      const transformedKeys = keys.map(key => ({
-        id: key.id,
-        name: key.name,
-        description: key.description,
-        key: key.key_value,
-        created: key.created_at,
-        usage: key.usage_count || 0
-      }));
-      setApiKeys(transformedKeys);
+      // If still loading session, wait
+      if (status === 'loading') {
+        return;
+      }
+
+      // Fetch API keys from REST endpoint
+      const response = await fetch('/api/api-keys', {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include', // Include session cookies
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Failed to fetch API keys');
+      }
+
+      const { apiKeys: keys } = await response.json();
+      setApiKeys(keys);
     } catch (error) {
       console.error('Failed to load API keys:', error);
-      showToast('Failed to load API keys', 'error');
+      showToast(error.message || 'Failed to load API keys', 'error');
+      
+      // Fallback to localStorage on error
+      const stored = localStorage.getItem('apiKeys');
+      setApiKeys(stored ? JSON.parse(stored) : []);
     } finally {
       setLoading(false);
     }
-  }, [showToast]);
+  }, [showToast, session, status]);
 
   useEffect(() => {
     loadApiKeys();
   }, [loadApiKeys]);
   
-  // Effect to save to localStorage if Supabase is not configured
+  // Effect to save to localStorage if user is not authenticated
   useEffect(() => {
-    if (!isSupabaseConfigured() && !loading) {
+    if (status === 'unauthenticated' && !loading) {
       localStorage.setItem('apiKeys', JSON.stringify(apiKeys));
     }
-  }, [apiKeys, loading]);
+  }, [apiKeys, loading, status]);
 
   const createApiKey = async (formData) => {
     try {
-      if (!isSupabaseConfigured()) {
+      // If user is not authenticated, use localStorage fallback
+      if (status === 'unauthenticated' || !session) {
         const newKey = {
           id: Date.now().toString(),
           name: formData.name,
@@ -62,44 +80,75 @@ export function useApiKeys(showToast) {
           usage: 0
         };
         setApiKeys(prev => [...prev, newKey]);
-      } else {
-        const newKeyData = {
+        showToast('API key created successfully!', 'create');
+        return true;
+      }
+
+      // Create API key via REST endpoint
+      const response = await fetch('/api/api-keys', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include', // Include session cookies
+        body: JSON.stringify({
           name: formData.name,
           description: formData.description,
-          key: generateApiKey()
-        };
-        await apiKeysService.createApiKey(newKeyData);
-        await loadApiKeys();
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Failed to create API key');
       }
+
+      await loadApiKeys();
       showToast('API key created successfully!', 'create');
       return true;
     } catch (error) {
       console.error('Failed to create API key:', error);
-      showToast('Failed to create API key', 'error');
+      showToast(error.message || 'Failed to create API key', 'error');
       return false;
     }
   };
   
   const updateApiKey = async (id, formData) => {
     try {
-      if (!isSupabaseConfigured()) {
-         setApiKeys(prev => prev.map(key =>
+      // If user is not authenticated, use localStorage fallback
+      if (status === 'unauthenticated' || !session) {
+        setApiKeys(prev => prev.map(key =>
           key.id === id
             ? { ...key, name: formData.name, description: formData.description }
             : key
         ));
-      } else {
-        await apiKeysService.updateApiKey(id, {
-          name: formData.name,
-          description: formData.description
-        });
-        await loadApiKeys();
+        showToast('API key updated successfully!', 'update');
+        return true;
       }
+
+      // Update API key via REST endpoint
+      const response = await fetch(`/api/api-keys/${id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include', // Include session cookies
+        body: JSON.stringify({
+          name: formData.name,
+          description: formData.description,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Failed to update API key');
+      }
+
+      await loadApiKeys();
       showToast('API key updated successfully!', 'update');
       return true;
     } catch (error) {
       console.error('Failed to update API key:', error);
-      showToast('Failed to update API key', 'error');
+      showToast(error.message || 'Failed to update API key', 'error');
       return false;
     }
   };
@@ -107,16 +156,32 @@ export function useApiKeys(showToast) {
   const deleteApiKey = async (id) => {
     if (confirm('Are you sure you want to delete this API key?')) {
       try {
-        if (!isSupabaseConfigured()) {
+        // If user is not authenticated, use localStorage fallback
+        if (status === 'unauthenticated' || !session) {
           setApiKeys(prev => prev.filter(key => key.id !== id));
-        } else {
-          await apiKeysService.deleteApiKey(id);
-          await loadApiKeys();
+          showToast('API key deleted successfully!', 'delete');
+          return;
         }
+
+        // Delete API key via REST endpoint
+        const response = await fetch(`/api/api-keys/${id}`, {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          credentials: 'include', // Include session cookies
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.message || 'Failed to delete API key');
+        }
+
+        await loadApiKeys();
         showToast('API key deleted successfully!', 'delete');
       } catch (error) {
         console.error('Failed to delete API key:', error);
-        showToast('Failed to delete API key', 'error');
+        showToast(error.message || 'Failed to delete API key', 'error');
       }
     }
   };

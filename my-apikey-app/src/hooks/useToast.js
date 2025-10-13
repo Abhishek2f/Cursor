@@ -77,10 +77,11 @@ export function ToastProvider({ children }) {
 
   // Cleanup timeouts on unmount
   useEffect(() => {
+    // Capture ref value to avoid stale closure issues
+    const currentTimeouts = timeoutRefs.current;
     return () => {
-      const timeouts = timeoutRefs.current;
-      timeouts.forEach(timeout => clearTimeout(timeout));
-      timeouts.clear();
+      currentTimeouts.forEach(timeout => clearTimeout(timeout));
+      currentTimeouts.clear();
     };
   }, []);
 

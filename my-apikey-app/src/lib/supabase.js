@@ -1,14 +1,14 @@
 import { createClient } from '@supabase/supabase-js'
 
+// ⚠️ SECURITY: These environment variables should ONLY be used server-side
+// Client-side code should NEVER have access to these credentials
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
-// Validate that required environment variables are set
-if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error('Missing required Supabase environment variables. Please check NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY')
-}
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+// Create Supabase client only if environment variables are available
+export const supabase = supabaseUrl && supabaseAnonKey 
+  ? createClient(supabaseUrl, supabaseAnonKey)
+  : null
 
 // Helper to check if Supabase is properly configured
 export const isSupabaseConfigured = () => {
@@ -16,12 +16,25 @@ export const isSupabaseConfigured = () => {
 }
 
 // Database helper functions for API keys
+// NOTE: These functions are deprecated for client use. Use the REST API endpoints instead.
+// They are kept here for server-side use and backward compatibility.
 export const apiKeysService = {
-  // Get all API keys
-  async getApiKeys() {
+  // Get API keys for a specific user
+  async getApiKeys(userId) {
+    if (!supabase) {
+      console.warn('Supabase not configured. Returning empty array.')
+      return []
+    }
+
+    if (!userId) {
+      console.warn('User ID is required to fetch API keys')
+      return []
+    }
+
     const { data, error } = await supabase
       .from('api_keys')
       .select('*')
+      .eq('user_id', userId)
       .order('created_at', { ascending: false })
     
     if (error) {
@@ -32,11 +45,20 @@ export const apiKeysService = {
     return data
   },
 
-  // Create new API key
-  async createApiKey(apiKeyData) {
+  // Create new API key for a specific user
+  async createApiKey(apiKeyData, userId) {
+    if (!supabase) {
+      throw new Error('Supabase not configured. Please set up Supabase environment variables.')
+    }
+
+    if (!userId) {
+      throw new Error('User ID is required to create API key')
+    }
+
     const { data, error } = await supabase
       .from('api_keys')
       .insert([{
+        user_id: userId,
         name: apiKeyData.name,
         description: apiKeyData.description,
         key_value: apiKeyData.key,
@@ -55,8 +77,16 @@ export const apiKeysService = {
     return data
   },
 
-  // Update API key
-  async updateApiKey(id, updates) {
+  // Update API key (must belong to user)
+  async updateApiKey(id, updates, userId) {
+    if (!supabase) {
+      throw new Error('Supabase not configured. Please set up Supabase environment variables.')
+    }
+
+    if (!userId) {
+      throw new Error('User ID is required to update API key')
+    }
+
     const { data, error } = await supabase
       .from('api_keys')
       .update({
@@ -65,6 +95,7 @@ export const apiKeysService = {
         updated_at: new Date().toISOString()
       })
       .eq('id', id)
+      .eq('user_id', userId)
       .select()
       .single()
     
@@ -76,12 +107,21 @@ export const apiKeysService = {
     return data
   },
 
-  // Delete API key
-  async deleteApiKey(id) {
+  // Delete API key (must belong to user)
+  async deleteApiKey(id, userId) {
+    if (!supabase) {
+      throw new Error('Supabase not configured. Please set up Supabase environment variables.')
+    }
+
+    if (!userId) {
+      throw new Error('User ID is required to delete API key')
+    }
+
     const { error } = await supabase
       .from('api_keys')
       .delete()
       .eq('id', id)
+      .eq('user_id', userId)
     
     if (error) {
       console.error('Error deleting API key:', error)
@@ -91,8 +131,13 @@ export const apiKeysService = {
     return true
   },
 
-  // Increment usage count
+  // Increment usage count (used by API key validation)
   async incrementUsage(keyValue) {
+    if (!supabase) {
+      console.warn('Supabase not configured. Skipping usage increment.')
+      return null
+    }
+
     // First get current usage count
     const { data: currentData, error: fetchError } = await supabase
       .from('api_keys')

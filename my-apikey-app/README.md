@@ -1,6 +1,6 @@
-# GitHub Repository Summarizer API
+# GitVault - Secure API Key Management
 
-A Next.js application that provides API key management and GitHub repository summarization using AI (Gemini 2.5 Pro) and Supabase for data storage.
+A Next.js application that provides secure API key management with Google authentication and GitHub repository summarization using AI (Gemini 2.5 Pro) and Supabase for data storage.
 
 ## Features
 
@@ -34,17 +34,51 @@ A Next.js application that provides API key management and GitHub repository sum
    - Create a project at [supabase.com](https://supabase.com)
    - Run the SQL schema from `supabase-schema.sql` in your Supabase SQL editor
 
-4. **Configure environment variables**
+4. **Configure Google OAuth (Required for Authentication)**
+   - Go to [Google Cloud Console](https://console.cloud.google.com/)
+   - Create a new project or select existing one
+   - Enable the Google+ API
+   - Go to "APIs & Services" → "OAuth consent screen"
+   - Configure for "External" users and fill in required details
+   - Add yourself as a test user
+   - Go to "APIs & Services" → "Credentials"
+   - Create "OAuth 2.0 Client ID" with type "Web application"
+   - Add authorized redirect URI: `http://localhost:3000/api/auth/callback/google`
+   - Copy the Client ID and Client Secret
+
+5. **Configure environment variables**
    ```bash
    cp .env.example .env.local
    ```
 
    Edit `.env.local` with your credentials:
    ```env
+   # Google OAuth (Required)
+   NEXTAUTH_SECRET=<generate-with-openssl-rand-base64-32>
+   NEXTAUTH_URL=http://localhost:3000
+   GOOGLE_CLIENT_ID=<your-google-client-id>
+   GOOGLE_CLIENT_SECRET=<your-google-client-secret>
+
+   # Supabase (Optional - for dashboard features)
    NEXT_PUBLIC_SUPABASE_URL=https://your-project-id.supabase.co
    NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key-here
+
+   # Google AI (Required for GitHub summarization)
    GOOGLE_API_KEY=your-google-gemini-api-key
+
+   # GitHub (Recommended - increases rate limit)
+   GITHUB_TOKEN=your-github-token-here
    ```
+
+   > **⚠️ GitHub Token Setup (Highly Recommended)**
+   >
+   > To avoid rate limiting, set up a GitHub Personal Access Token:
+   > 1. Go to [GitHub Settings > Tokens](https://github.com/settings/tokens)
+   > 2. Click "Generate new token (classic)"
+   > 3. Select scope: `public_repo`
+   > 4. Copy the token and add it to your `.env.local` file
+   >
+   > This increases your rate limit from 60 to 5,000 requests per hour!
 
 5. **Start development server**
    ```bash
@@ -75,9 +109,28 @@ A Next.js application that provides API key management and GitHub repository sum
 {
   "success": true,
   "message": "Repository summarized successfully.",
-  "modelUsed": "gemini-2.5-pro",
+  "modelUsed": "gemini-2.0-flash-lite",
   "readmeSource": "https://raw.githubusercontent.com/owner/repo/main/README.md",
-  "githubSummary": "Detailed summary of the repository..."
+  "githubSummary": "Detailed summary of the repository...",
+  "cool_facts": [
+    "Interesting fact 1 about the project",
+    "Notable feature or achievement"
+  ],
+  "tools_used": [
+    "JavaScript",
+    "React",
+    "Node.js",
+    "PostgreSQL"
+  ],
+  "stars": 1234,
+  "latest_version": "v2.1.0",
+  "license_type": "MIT License",
+  "website_url": "https://example.com",
+  "usage": {
+    "usage": 15,
+    "limit": 100,
+    "remaining": 85
+  }
 }
 ```
 
@@ -95,11 +148,21 @@ A Next.js application that provides API key management and GitHub repository sum
    ```
 
 2. **Set Environment Variables** in Vercel dashboard:
-   - `NEXT_PUBLIC_SUPABASE_URL`
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - `NEXTAUTH_SECRET` (generate new secret for production)
+   - `NEXTAUTH_URL` (your production domain)
+   - `GOOGLE_CLIENT_ID`
+   - `GOOGLE_CLIENT_SECRET`
    - `GOOGLE_API_KEY`
+   - `GITHUB_TOKEN` (recommended)
+   - `NEXT_PUBLIC_SUPABASE_URL` (optional)
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY` (optional)
 
-3. **Deploy**
+3. **Update Google OAuth Settings** for production:
+   - Go to [Google Cloud Console](https://console.cloud.google.com/)
+   - Update your OAuth client with production redirect URI: `https://yourdomain.com/api/auth/callback/google`
+   - Submit for verification if needed (for production apps)
+
+4. **Deploy**
    ```bash
    vercel --prod
    ```
@@ -118,9 +181,14 @@ The app can be deployed to any platform that supports Next.js:
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `NEXT_PUBLIC_SUPABASE_URL` | Your Supabase project URL | ✅ |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Your Supabase anonymous key | ✅ |
+| `NEXTAUTH_SECRET` | NextAuth.js secret for session encryption | ✅ |
+| `NEXTAUTH_URL` | Base URL of your application | ✅ |
+| `GOOGLE_CLIENT_ID` | Google OAuth client ID | ✅ |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret | ✅ |
 | `GOOGLE_API_KEY` | Google AI API key for Gemini | ✅ |
+| `GITHUB_TOKEN` | GitHub personal access token (recommended) | ⚠️ |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL (optional) | ❌ |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anonymous key (optional) | ❌ |
 
 ## Development
 

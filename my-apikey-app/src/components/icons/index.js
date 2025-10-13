@@ -7,3 +7,5 @@ export { default as EyeOff } from './EyeOff';
 export { default as Copy } from './Copy';
 export { default as Edit } from './Edit';
 export { default as Delete } from './Delete';
+export { default as Github } from './Github';
+export { default as Send } from './Send';
