@@ -1013,16 +1013,8 @@ export class SummarizerService {
 
     // README (with fallback) and manifests - these are essential
     console.log(`📖 Fetching README with branch: ${meta.default_branch}`);
-    const discoveredBranches = await fetchBranchNames(owner, repo);
-    const branchCandidates = [
-      undefined,
-      meta.default_branch,
-      'main',
-      'master',
-      'trunk',
-      'develop',
-      ...discoveredBranches
-    ];
+    const branchCandidates = [meta.default_branch, undefined, 'main', 'master'];
+
     const triedBranches = new Set();
     let readme;
     let readmeBranch = null;
