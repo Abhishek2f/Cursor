@@ -880,11 +880,58 @@ export class SummarizerService {
 
     // README (with fallback) and manifests - these are essential
     console.log(`📖 Fetching README with branch: ${meta.default_branch}`);
-    const readme = await fetchReadme(owner, repo, meta.default_branch);
-    console.log(`📖 README fetch result: ${JSON.stringify(readme)}`);
+    const branchCandidates = [meta.default_branch, undefined, 'main', 'master'];
+    const triedBranches = new Set();
+    let readme;
+    let readmeBranch = null;
+    let lastReadmeError;
+
+    for (const branch of branchCandidates) {
+      const key = branch ?? 'default';
+      if (triedBranches.has(key)) continue;
+      triedBranches.add(key);
+
+      try {
+        console.log(`📖 Attempting README fetch using branch: ${branch ?? 'default (GitHub default branch)'}`);
+        readme = await fetchReadme(owner, repo, branch);
+        if (branch) {
+          readmeBranch = branch;
+        } else if (readme?.download_url) {
+          try {
+            const downloadUrl = new URL(readme.download_url);
+            const pathSegments = downloadUrl.pathname.split('/').filter(Boolean);
+            // raw.githubusercontent.com/<owner>/<repo>/<branch>/...
+            if (pathSegments.length >= 3) {
+              readmeBranch = pathSegments[2];
+            }
+          } catch (parseError) {
+            console.warn('⚠️ Unable to determine README branch from download_url:', parseError.message);
+          }
+        }
+        console.log(`📖 README fetch result: ${JSON.stringify(readme)}`);
+        break;
+      } catch (error) {
+        lastReadmeError = error;
+        // Bubble up rate limiting errors immediately so clients can respond appropriately
+        if (error?.message && error.message.includes('Rate limited')) {
+          throw error;
+        }
+        console.warn(`⚠️ README fetch failed for branch ${branch ?? 'default'}: ${error?.message}`);
+      }
+    }
+
+    if (!readme) {
+      const branchList = Array.from(triedBranches).join(', ');
+      const errorMessage = `README not found after trying branches: ${branchList}. ${lastReadmeError?.message || ''}`.trim();
+      throw new Error(errorMessage);
+    }
+
+    if (!readmeBranch) {
+      readmeBranch = meta.default_branch || 'main';
+    }
 
     try {
-      requirementsTxt = await fetchOptionalText(owner, repo, 'requirements.txt', meta.default_branch);
+      requirementsTxt = await fetchOptionalText(owner, repo, 'requirements.txt', readmeBranch);
     } catch (error) {
       console.warn('Could not fetch requirements.txt (likely rate limited):', error.message);
     }
@@ -926,7 +973,7 @@ export class SummarizerService {
       success: true,
       message: 'Repository summarized successfully.',
       modelUsed: this.getModelName(),
-      readmeSource: readme.download_url || `https://raw.githubusercontent.com/${owner}/${repo}/${meta.default_branch}/${readme.path || 'README.md'}`,
+      readmeSource: readme.download_url || `https://raw.githubusercontent.com/${owner}/${repo}/${readmeBranch}/${readme.path || 'README.md'}`,
       githubSummary: extraction.githubSummary,
       cool_facts: extraction.cool_facts,
       tools_used: extraction.tools_used,
