@@ -174,6 +174,141 @@ async function fetchLanguages(owner, repo) {
   }
 }
 
+async function fetchBranchNames(owner, repo) {
+  await new Promise(resolve => setTimeout(resolve, 100));
+
+  try {
+    console.log(`🪵 Fetching branch list for ${owner}/${repo}`);
+    const branches = await ghGetJson(`https://api.github.com/repos/${owner}/${repo}/branches?per_page=100`);
+    if (!Array.isArray(branches)) return [];
+    const names = branches
+      .map(b => b?.name)
+      .filter(Boolean);
+    console.log(`🪵 Found branches for ${owner}/${repo}: ${names.join(', ')}`);
+    return names;
+  } catch (error) {
+    console.warn(`⚠️ Could not fetch branch list for ${owner}/${repo}: ${error.message}`);
+    return [];
+  }
+}
+
+function scoreReadmeCandidate(path) {
+  const lower = path.toLowerCase();
+  const depth = path.split('/').length;
+  let score = depth * 10; // prefer shallower paths
+
+  if (lower === 'readme.md') score -= 20;
+  if (lower.endsWith('/readme.md')) score -= 18;
+
+  const extPreference = [
+    '.md', '.mdx', '.markdown', '.rst', '.txt', '.org', '.adoc'
+  ];
+
+  const ext = extPreference.find(e => lower.endsWith(e));
+  if (ext) {
+    score -= (extPreference.indexOf(ext) + 1) * 2;
+  } else if (!lower.includes('.')) {
+    score -= 1; // bare README (no extension)
+  }
+
+  if (lower.includes('docs/') || lower.includes('documentation/')) {
+    score += 5; // slightly deprioritize docs folder readmes
+  }
+
+  return score;
+}
+
+async function fetchReadmeByPath(owner, repo, path, ref) {
+  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`;
+  console.log(`📄 Fetching README candidate path ${path} via ${url}`);
+
+  const res = await fetch(url, { headers: ghHeaders() });
+  console.log(`📄 Candidate path response status: ${res.status}`);
+
+  if (res.status === 200) {
+    const j = await res.json();
+    const content = j.content ? Buffer.from(j.content, 'base64').toString('utf8') : '';
+    if (!content) {
+      console.warn(`⚠️ Candidate path ${path} returned empty content`);
+    }
+    return { text: content, download_url: j.download_url, path: j.path };
+  }
+
+  if (res.status === 403) {
+    const err = new Error(`Rate limited by GitHub API while reading ${path}. Try again later${GITHUB_TOKEN ? '' : ' or configure GITHUB_TOKEN environment variable'}.`);
+    err.isRateLimit = true;
+    throw err;
+  }
+
+  if (res.status !== 404) {
+    try {
+      const body = await res.text();
+      console.warn(`⚠️ Unexpected ${res.status} for path ${path}: ${body}`);
+    } catch (error) {
+      console.warn(`⚠️ Unexpected ${res.status} for path ${path}, failed to read body: ${error.message}`);
+    }
+  }
+
+  return null;
+}
+
+async function fetchReadmeFromTree(owner, repo, ref) {
+  if (!ref) return null;
+
+  const treeUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`;
+  console.log(`🌲 Inspecting repository tree for README candidates: ${treeUrl}`);
+
+  try {
+    const res = await fetch(treeUrl, { headers: ghHeaders() });
+    console.log(`🌲 Tree lookup status for ${ref}: ${res.status}`);
+
+    if (res.status === 404) {
+      console.warn(`🌲 Tree lookup 404 for ref ${ref} - branch may not exist`);
+      return null;
+    }
+
+    if (res.status === 403) {
+      const err = new Error(`Rate limited by GitHub API while inspecting repository tree for ${ref}.`);
+      err.isRateLimit = true;
+      throw err;
+    }
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      console.warn(`🌲 Unexpected status ${res.status} when fetching tree for ${ref}: ${body}`);
+      return null;
+    }
+
+    const tree = await res.json();
+    if (!tree?.tree || !Array.isArray(tree.tree)) {
+      console.warn(`🌲 Tree response missing entries for ${ref}`);
+      return null;
+    }
+
+    const candidates = tree.tree
+      .filter(node => node?.type === 'blob' && typeof node.path === 'string' && /readme/i.test(node.path.split('/').pop() || ''))
+      .sort((a, b) => scoreReadmeCandidate(a.path) - scoreReadmeCandidate(b.path));
+
+    console.log(`🌲 Tree candidate count for ${ref}: ${candidates.length}`);
+
+    for (const candidate of candidates.slice(0, 5)) {
+      const candidatePath = candidate.path;
+      const content = await fetchReadmeByPath(owner, repo, candidatePath, ref);
+      if (content?.text) {
+        console.log(`🌲 Successfully loaded README candidate from tree: ${candidatePath}`);
+        return content;
+      }
+    }
+  } catch (error) {
+    if (error.isRateLimit || error.message.includes('Rate limited')) {
+      throw error;
+    }
+    console.warn(`🌲 Failed to inspect tree for ${ref}: ${error.message}`);
+  }
+
+  return null;
+}
+
 async function fetchReadme(owner, repo, ref) {
   // Add a small delay to avoid rate limiting
   await new Promise(resolve => setTimeout(resolve, 100));
@@ -225,7 +360,18 @@ async function fetchReadme(owner, repo, ref) {
   }
 
   // Enhanced fallback: try common README filenames directly
-  const commonReadmeNames = ['README.md', 'README.txt', 'README', 'readme.md', 'readme.txt', 'README.rst', 'README.MD'];
+  const commonReadmeNames = [
+    'README.md',
+    'README.txt',
+    'README',
+    'readme.md',
+    'readme.txt',
+    'README.rst',
+    'README.MD',
+    'README.mdx',
+    'README.markdown',
+    'README.org'
+  ];
   console.log(`🔄 Trying ${commonReadmeNames.length} fallback methods for ${owner}/${repo}`);
 
   for (let i = 0; i < commonReadmeNames.length; i++) {
@@ -236,33 +382,10 @@ async function fetchReadme(owner, repo, ref) {
       console.log(`⏳ Waiting ${delay}ms before attempt ${i + 1}/${commonReadmeNames.length}`);
       await new Promise(resolve => setTimeout(resolve, delay));
 
-      const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(readmeName)}${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`;
-      console.log(`🔍 Trying fallback ${i + 1}/${commonReadmeNames.length}: ${url}`);
-
-      const res = await fetch(url, { headers: ghHeaders() });
-
-      console.log(`📊 Fallback ${i + 1} response status: ${res.status}`);
-
-      if (res.status === 200) {
-        const j = await res.json();
-        const content = j.content ? Buffer.from(j.content, 'base64').toString('utf8') : '';
-        console.log(`✅ Successfully fetched ${readmeName} for ${owner}/${repo}, content length: ${content.length}`);
-        return { text: content, download_url: j.download_url, path: j.path };
-      } else if (res.status === 403) {
-        // If we hit rate limiting during fallback, throw a more specific error
-        const rateLimitError = new Error(`Rate limited by GitHub API during fallback attempt. Try again later${!hasToken ? ' or configure GITHUB_TOKEN environment variable' : ''}.`);
-        rateLimitError.isRateLimit = true;
-        throw rateLimitError;
-      } else if (res.status === 404) {
-        console.log(`❌ Fallback ${readmeName} not found for ${owner}/${repo} (404)`);
-      } else {
-        console.log(`⚠️ Unexpected status ${res.status} for fallback ${readmeName}`);
-        try {
-          const errorText = await res.text();
-          console.log(`❌ Fallback error response: ${errorText}`);
-        } catch (e) {
-          console.log(`❌ Could not read fallback error response: ${e.message}`);
-        }
+      const content = await fetchReadmeByPath(owner, repo, readmeName, ref);
+      if (content?.text) {
+        console.log(`✅ Successfully fetched ${readmeName} for ${owner}/${repo}, content length: ${content.text.length}`);
+        return content;
       }
     } catch (error) {
       if (error.isRateLimit || error.message.includes('Rate limited')) {
@@ -272,8 +395,18 @@ async function fetchReadme(owner, repo, ref) {
     }
   }
 
+  // Try scanning the repository tree for any README variants (supports nested paths)
+  if (ref) {
+    const treeReadme = await fetchReadmeFromTree(owner, repo, ref);
+    if (treeReadme?.text) {
+      return treeReadme;
+    }
+  } else {
+    console.log('🌲 Skipping tree scan because no branch/ref specified for README search.');
+  }
+
   // If we get here, we've exhausted all options
-  const errorMessage = `README not found in repository ${owner}/${repo}. Tried ${commonReadmeNames.length + 1} methods.${!hasToken ? ' Consider configuring GITHUB_TOKEN for higher rate limits.' : ''}`;
+  const errorMessage = `README not found in repository ${owner}/${repo} after API lookup, ${commonReadmeNames.length} fallback filenames, and a repository tree scan.${!hasToken ? ' Consider configuring GITHUB_TOKEN for higher rate limits.' : ''}`;
   console.error(errorMessage);
   throw new Error(errorMessage);
 }
@@ -880,11 +1013,67 @@ export class SummarizerService {
 
     // README (with fallback) and manifests - these are essential
     console.log(`📖 Fetching README with branch: ${meta.default_branch}`);
-    const readme = await fetchReadme(owner, repo, meta.default_branch);
-    console.log(`📖 README fetch result: ${JSON.stringify(readme)}`);
+    const discoveredBranches = await fetchBranchNames(owner, repo);
+    const branchCandidates = [
+      undefined,
+      meta.default_branch,
+      'main',
+      'master',
+      'trunk',
+      'develop',
+      ...discoveredBranches
+    ];
+    const triedBranches = new Set();
+    let readme;
+    let readmeBranch = null;
+    let lastReadmeError;
+
+    for (const branch of branchCandidates) {
+      const key = branch ?? 'default';
+      if (triedBranches.has(key)) continue;
+      triedBranches.add(key);
+
+      try {
+        console.log(`📖 Attempting README fetch using branch: ${branch ?? 'default (GitHub default branch)'}`);
+        readme = await fetchReadme(owner, repo, branch);
+        if (branch) {
+          readmeBranch = branch;
+        } else if (readme?.download_url) {
+          try {
+            const downloadUrl = new URL(readme.download_url);
+            const pathSegments = downloadUrl.pathname.split('/').filter(Boolean);
+            // raw.githubusercontent.com/<owner>/<repo>/<branch>/...
+            if (pathSegments.length >= 3) {
+              readmeBranch = pathSegments[2];
+            }
+          } catch (parseError) {
+            console.warn('⚠️ Unable to determine README branch from download_url:', parseError.message);
+          }
+        }
+        console.log(`📖 README fetch result: ${JSON.stringify(readme)}`);
+        break;
+      } catch (error) {
+        lastReadmeError = error;
+        // Bubble up rate limiting errors immediately so clients can respond appropriately
+        if (error?.message && error.message.includes('Rate limited')) {
+          throw error;
+        }
+        console.warn(`⚠️ README fetch failed for branch ${branch ?? 'default'}: ${error?.message}`);
+      }
+    }
+
+    if (!readme) {
+      const branchList = Array.from(triedBranches).join(', ');
+      const errorMessage = `README not found after trying branches: ${branchList}. ${lastReadmeError?.message || ''}`.trim();
+      throw new Error(errorMessage);
+    }
+
+    if (!readmeBranch) {
+      readmeBranch = meta.default_branch || 'main';
+    }
 
     try {
-      requirementsTxt = await fetchOptionalText(owner, repo, 'requirements.txt', meta.default_branch);
+      requirementsTxt = await fetchOptionalText(owner, repo, 'requirements.txt', readmeBranch);
     } catch (error) {
       console.warn('Could not fetch requirements.txt (likely rate limited):', error.message);
     }
@@ -926,7 +1115,7 @@ export class SummarizerService {
       success: true,
       message: 'Repository summarized successfully.',
       modelUsed: this.getModelName(),
-      readmeSource: readme.download_url || `https://raw.githubusercontent.com/${owner}/${repo}/${meta.default_branch}/${readme.path || 'README.md'}`,
+      readmeSource: readme.download_url || `https://raw.githubusercontent.com/${owner}/${repo}/${readmeBranch}/${readme.path || 'README.md'}`,
       githubSummary: extraction.githubSummary,
       cool_facts: extraction.cool_facts,
       tools_used: extraction.tools_used,
