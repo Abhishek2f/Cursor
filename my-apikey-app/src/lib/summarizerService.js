@@ -6,6 +6,15 @@
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || ''; // optional but recommended
 
+// Log environment info for debugging (without exposing sensitive data)
+console.log('Environment check:', {
+  hasGitHubToken: !!GITHUB_TOKEN,
+  tokenLength: GITHUB_TOKEN.length,
+  nodeEnv: process.env.NODE_ENV,
+  vercel: !!process.env.VERCEL,
+  vercelEnv: process.env.VERCEL_ENV
+});
+
 /* -------------------------------------------------------------------------- */
 /*                               GitHub helpers                               */
 /* -------------------------------------------------------------------------- */
@@ -15,7 +24,17 @@ function ghHeaders(extra = {}) {
     Accept: 'application/vnd.github.v3+json',
     'User-Agent': 'readme-summarizer',
   };
-  if (GITHUB_TOKEN) h.Authorization = `Bearer ${GITHUB_TOKEN}`;
+
+  // Log token status for debugging (don't log the actual token)
+  const hasToken = GITHUB_TOKEN && GITHUB_TOKEN.trim().length > 0;
+  console.log(`GitHub API request - Token configured: ${hasToken}`);
+
+  if (hasToken) {
+    h.Authorization = `Bearer ${GITHUB_TOKEN}`;
+  } else {
+    console.warn('No GitHub token configured - rate limiting will apply');
+  }
+
   return { ...h, ...extra };
 }
 
@@ -80,12 +99,14 @@ async function fetchRepoMeta(owner, repo) {
   await new Promise(resolve => setTimeout(resolve, 100));
 
   try {
+    console.log(`Fetching repo metadata for ${owner}/${repo}`);
     const j = await ghGetJson(`https://api.github.com/repos/${owner}/${repo}`);
+    console.log(`Successfully fetched repo metadata for ${owner}/${repo}, default branch: ${j.default_branch}`);
     return {
       stars: j.stargazers_count ?? 0,
       license_type: j.license?.spdx_id || j.license?.key || null,
       website_url: j.homepage || null,
-      default_branch: j.default_branch || 'main',
+      default_branch: j.default_branch || 'master',
       description: j.description || null,
       topics: j.topics || [],
       language: j.language || null,
@@ -96,12 +117,13 @@ async function fetchRepoMeta(owner, repo) {
       updated_at: j.updated_at || null,
     };
   } catch (error) {
-    console.error(`Error fetching repo metadata for ${owner}/${repo}:`, error);
+    console.error(`Error fetching repo metadata for ${owner}/${repo}:`, error.message);
+    console.error('Full error:', error);
     return {
       stars: 0,
       license_type: null,
       website_url: null,
-      default_branch: 'main',
+      default_branch: 'master', // GitHub's traditional default branch
       description: null,
       topics: [],
       language: null,
@@ -158,6 +180,7 @@ async function fetchReadme(owner, repo, ref) {
 
   // Check if we have a GitHub token
   const hasToken = GITHUB_TOKEN && GITHUB_TOKEN.trim().length > 0;
+  console.log(`Fetching README for ${owner}/${repo} - Token available: ${hasToken}, branch: ${ref || 'default'}`);
 
   // Prefer the /readme endpoint (returns base64 content + download_url)
   try {
@@ -165,6 +188,8 @@ async function fetchReadme(owner, repo, ref) {
     console.log(`Fetching README for ${owner}/${repo} from: ${url}${hasToken ? ' (with token)' : ' (no token)'}`);
 
     const res = await fetch(url, { headers: ghHeaders() });
+
+    console.log(`GitHub API response status: ${res.status} for ${url}`);
 
     if (res.status === 200) {
       const j = await res.json();
@@ -181,6 +206,13 @@ async function fetchReadme(owner, repo, ref) {
       // Don't throw yet, try fallback methods
     } else {
       console.log(`Unexpected status ${res.status} for README API endpoint ${owner}/${repo}`);
+      // Try to get error details
+      try {
+        const errorText = await res.text();
+        console.log(`Error response body: ${errorText}`);
+      } catch (e) {
+        console.log(`Could not read error response body: ${e.message}`);
+      }
     }
   } catch (error) {
     if (error.isRateLimit || error.message.includes('Rate limited')) {
@@ -200,7 +232,7 @@ async function fetchReadme(owner, repo, ref) {
       await new Promise(resolve => setTimeout(resolve, delay));
 
       const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(readmeName)}${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`;
-      console.log(`Trying fallback README: ${url}`);
+      console.log(`Trying fallback README: ${url} (branch: ${ref || 'default'})`);
 
       const res = await fetch(url, { headers: ghHeaders() });
 
@@ -804,7 +836,10 @@ export class SummarizerService {
    */
   async summarizeFromGitHubUrl(githubUrl) {
     if (!githubUrl) throw new Error('githubUrl is required');
+
+    console.log(`Starting GitHub summarization for: ${githubUrl}`);
     const { owner, repo } = parseRepoUrl(githubUrl);
+    console.log(`Parsed repo: ${owner}/${repo}`);
 
     // Probe repo meta (required for basic info and branch detection)
     const meta = await fetchRepoMeta(owner, repo);
