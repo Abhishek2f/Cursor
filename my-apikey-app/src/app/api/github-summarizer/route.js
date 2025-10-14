@@ -106,8 +106,30 @@ const enhancedPOSTHandler = withSecurityMonitoring(withRateLimitMonitoring(async
     if (error.message && error.message.includes('Rate limited')) {
       return createErrorResponse(
         'Rate Limited',
-        'GitHub API rate limit exceeded. Please try again later or use authentication.',
+        error.message.includes('GITHUB_TOKEN') ?
+          'GitHub API rate limit exceeded. Configure GITHUB_TOKEN environment variable for higher limits.' :
+          'GitHub API rate limit exceeded. Please try again later.',
         429
+      )
+    }
+
+    // Handle README not found errors specifically
+    if (error.message && error.message.includes('README not found')) {
+      return createErrorResponse(
+        'README Not Found',
+        error.message.includes('GITHUB_TOKEN') ?
+          `${error.message} This might be due to rate limiting - try configuring GITHUB_TOKEN.` :
+          error.message,
+        404
+      )
+    }
+
+    // Handle timeout errors
+    if (error.message && error.message.includes('Request timeout')) {
+      return createErrorResponse(
+        'Request Timeout',
+        'GitHub API request timed out. Please try again.',
+        408
       )
     }
 

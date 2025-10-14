@@ -37,9 +37,28 @@ async function retryWithBackoff(fn, maxRetries = 3, initialDelay = 1000) {
 
 async function ghGetJson(url) {
   return retryWithBackoff(async () => {
-  const res = await fetch(url, { headers: ghHeaders() });
-  if (!res.ok) throw new Error(`GitHub ${res.status}: ${url}`);
-  return res.json();
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+      const res = await fetch(url, {
+        headers: ghHeaders(),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        const errorText = await res.text().catch(() => 'Unknown error');
+        throw new Error(`GitHub ${res.status}: ${url} - ${errorText}`);
+      }
+      return res.json();
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        throw new Error(`Request timeout for ${url}`);
+      }
+      throw error;
+    }
   });
 }
 
@@ -137,48 +156,79 @@ async function fetchReadme(owner, repo, ref) {
   // Add a small delay to avoid rate limiting
   await new Promise(resolve => setTimeout(resolve, 100));
 
+  // Check if we have a GitHub token
+  const hasToken = GITHUB_TOKEN && GITHUB_TOKEN.trim().length > 0;
+
   // Prefer the /readme endpoint (returns base64 content + download_url)
   try {
     const url = `https://api.github.com/repos/${owner}/${repo}/readme${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`;
+    console.log(`Fetching README for ${owner}/${repo} from: ${url}${hasToken ? ' (with token)' : ' (no token)'}`);
+
     const res = await fetch(url, { headers: ghHeaders() });
 
     if (res.status === 200) {
       const j = await res.json();
       const content = j.content ? Buffer.from(j.content, 'base64').toString('utf8') : '';
+      console.log(`Successfully fetched README for ${owner}/${repo}, content length: ${content.length}`);
       return { text: content, download_url: j.download_url, path: j.path };
     } else if (res.status === 403) {
       // If we hit rate limiting, throw a more specific error
-      throw new Error(`Rate limited by GitHub API. Try again later or use authentication.`);
+      const rateLimitError = new Error(`Rate limited by GitHub API. Try again later${!hasToken ? ' or configure GITHUB_TOKEN environment variable' : ''}.`);
+      rateLimitError.isRateLimit = true;
+      throw rateLimitError;
     } else if (res.status === 404) {
-      throw new Error(`README not found in repository ${owner}/${repo}`);
+      console.log(`README API endpoint returned 404 for ${owner}/${repo}, trying fallback methods...`);
+      // Don't throw yet, try fallback methods
+    } else {
+      console.log(`Unexpected status ${res.status} for README API endpoint ${owner}/${repo}`);
     }
   } catch (error) {
-    if (error.message.includes('Rate limited')) {
+    if (error.isRateLimit || error.message.includes('Rate limited')) {
       throw error; // Re-throw rate limit errors
     }
-    console.error(`Error fetching README via API endpoint for ${owner}/${repo}:`, error);
+    console.error(`Error fetching README via API endpoint for ${owner}/${repo}:`, error.message);
   }
 
-  // Simplified fallback: try common README filenames directly
-  const commonReadmeNames = ['README.md', 'README.txt', 'README', 'readme.md', 'readme.txt'];
+  // Enhanced fallback: try common README filenames directly
+  const commonReadmeNames = ['README.md', 'README.txt', 'README', 'readme.md', 'readme.txt', 'README.rst', 'README.MD'];
 
-  for (const readmeName of commonReadmeNames) {
+  for (let i = 0; i < commonReadmeNames.length; i++) {
+    const readmeName = commonReadmeNames[i];
     try {
-      await new Promise(resolve => setTimeout(resolve, 200)); // Longer delay for fallback
+      // Increase delay for each attempt to avoid rate limiting
+      const delay = 200 + (i * 100);
+      await new Promise(resolve => setTimeout(resolve, delay));
+
       const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(readmeName)}${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`;
+      console.log(`Trying fallback README: ${url}`);
+
       const res = await fetch(url, { headers: ghHeaders() });
 
       if (res.status === 200) {
         const j = await res.json();
-    const content = j.content ? Buffer.from(j.content, 'base64').toString('utf8') : '';
+        const content = j.content ? Buffer.from(j.content, 'base64').toString('utf8') : '';
+        console.log(`Successfully fetched ${readmeName} for ${owner}/${repo}, content length: ${content.length}`);
         return { text: content, download_url: j.download_url, path: j.path };
+      } else if (res.status === 403) {
+        // If we hit rate limiting during fallback, throw a more specific error
+        const rateLimitError = new Error(`Rate limited by GitHub API during fallback attempt. Try again later${!hasToken ? ' or configure GITHUB_TOKEN environment variable' : ''}.`);
+        rateLimitError.isRateLimit = true;
+        throw rateLimitError;
+      } else if (res.status === 404) {
+        console.log(`Fallback ${readmeName} not found for ${owner}/${repo}`);
       }
-  } catch (error) {
-      console.error(`Error fetching ${readmeName} for ${owner}/${repo}:`, error);
+    } catch (error) {
+      if (error.isRateLimit || error.message.includes('Rate limited')) {
+        throw error; // Re-throw rate limit errors
+      }
+      console.error(`Error fetching ${readmeName} for ${owner}/${repo}:`, error.message);
     }
   }
 
-  throw new Error(`README not found in repository ${owner}/${repo}`);
+  // If we get here, we've exhausted all options
+  const errorMessage = `README not found in repository ${owner}/${repo}. Tried ${commonReadmeNames.length + 1} methods.${!hasToken ? ' Consider configuring GITHUB_TOKEN for higher rate limits.' : ''}`;
+  console.error(errorMessage);
+  throw new Error(errorMessage);
 }
 
 async function fetchOptionalText(owner, repo, path, ref) {

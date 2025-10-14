@@ -153,9 +153,17 @@ A Next.js application that provides secure API key management with Google authen
    - `GOOGLE_CLIENT_ID`
    - `GOOGLE_CLIENT_SECRET`
    - `GOOGLE_API_KEY`
-   - `GITHUB_TOKEN` (recommended)
+   - `GITHUB_TOKEN` (⚠️ **Highly Recommended** - prevents rate limiting)
    - `NEXT_PUBLIC_SUPABASE_URL` (optional)
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY` (optional)
+
+   > **⚠️ Important: GitHub Token Setup**
+   >
+   > To avoid "README not found" errors due to rate limiting:
+   > 1. Go to [GitHub Settings > Tokens](https://github.com/settings/tokens)
+   > 2. Generate a Personal Access Token with `public_repo` scope
+   > 3. Add `GITHUB_TOKEN=your_token_here` in Vercel environment variables
+   > 4. This increases rate limit from 60 to 5,000 requests/hour!
 
 3. **Update Google OAuth Settings** for production:
    - Go to [Google Cloud Console](https://console.cloud.google.com/)
@@ -244,7 +252,8 @@ src/
 
 1. **"Invalid API key"**: Ensure your API key exists in the database and is active
 2. **"README not found"**: Check if the GitHub repository exists and has a README.md file
-3. **Build errors**: Run `npm install` to ensure all dependencies are installed
+3. **"Rate limited by GitHub API"**: This happens when you exceed GitHub's API rate limit (60 requests/hour without authentication). Configure `GITHUB_TOKEN` environment variable for higher limits (5,000 requests/hour)
+4. **Build errors**: Run `npm install` to ensure all dependencies are installed
 
 ### Logs
 

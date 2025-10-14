@@ -9,6 +9,47 @@ import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 const rateLimitCache = new Map();
 
 /**
+ * In-memory rate limiting fallback when Supabase is not available
+ * @param {string} apiKeyValue - The API key value
+ * @returns {RateLimitResult} Rate limit check result
+ */
+function checkInMemoryRateLimit(apiKeyValue) {
+  const now = Date.now();
+  const cacheKey = `apikey:${apiKeyValue}`;
+
+  // Check cache first
+  const cached = rateLimitCache.get(cacheKey);
+  if (cached && (now - cached.timestamp) < API_KEY_LIMITS.windowMs) {
+    if (cached.requestCount >= API_KEY_LIMITS.maxRequests) {
+      return {
+        allowed: false,
+        usage: cached.requestCount,
+        limit: API_KEY_LIMITS.maxRequests
+      };
+    }
+
+    cached.requestCount++;
+    return {
+      allowed: true,
+      usage: cached.requestCount,
+      limit: API_KEY_LIMITS.maxRequests
+    };
+  }
+
+  // Initialize or reset cache entry
+  rateLimitCache.set(cacheKey, {
+    timestamp: now,
+    requestCount: 1
+  });
+
+  return {
+    allowed: true,
+    usage: 1,
+    limit: API_KEY_LIMITS.maxRequests
+  };
+}
+
+/**
  * IP-based rate limiting configuration
  */
 const IP_RATE_LIMITS = {
@@ -139,8 +180,9 @@ export async function checkAndIncrementRateLimit(apiKeyValue, skipKey = 'Demo_AP
   }
 
   if (!isSupabaseConfigured() || !supabase) {
-    console.warn('Supabase not configured, skipping rate limit check');
-    return { allowed: true, usage: 0, limit: 0 };
+    console.warn('Supabase not configured, using in-memory rate limiting');
+    // Fall back to in-memory rate limiting
+    return checkInMemoryRateLimit(apiKeyValue);
   }
 
   try {
@@ -212,7 +254,12 @@ export async function checkAndIncrementRateLimit(apiKeyValue, skipKey = 'Demo_AP
  * @returns {Promise<{usage: number, limit: number, remaining: number} | null>} Usage info or null if not found
  */
 export async function getApiKeyUsageInfo(apiKeyValue, skipKey = 'Demo_API_Key') {
-  if (apiKeyValue === skipKey || !isSupabaseConfigured() || !supabase) {
+  if (apiKeyValue === skipKey) {
+    return null;
+  }
+
+  if (!isSupabaseConfigured() || !supabase) {
+    console.warn('Supabase not configured, cannot get usage info');
     return null;
   }
 

@@ -193,12 +193,15 @@ export function validateRequestSecurity(request) {
   }
 
   // Check for missing or suspicious referer (basic CSRF protection)
-  if (!referer && request.method !== 'GET') {
-    // For non-GET requests, require a referer (basic CSRF protection)
+  // Skip referer check for API routes to avoid blocking legitimate API calls
+  const isApiRoute = request.url.includes('/api/');
+  if (!referer && request.method !== 'GET' && !isApiRoute) {
+    // For non-GET requests on non-API routes, require a referer (basic CSRF protection)
     // Note: This is basic protection - proper CSRF tokens should be implemented
     logSecurityEvent(SECURITY_EVENTS.SUSPICIOUS_ACTIVITY, {
       reason: 'Missing referer header on non-GET request',
-      method: request.method
+      method: request.method,
+      url: request.url
     }, request);
 
     return {
