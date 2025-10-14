@@ -180,21 +180,24 @@ async function fetchReadme(owner, repo, ref) {
 
   // Check if we have a GitHub token
   const hasToken = GITHUB_TOKEN && GITHUB_TOKEN.trim().length > 0;
-  console.log(`Fetching README for ${owner}/${repo} - Token available: ${hasToken}, branch: ${ref || 'default'}`);
+  console.log(`🔍 Fetching README for ${owner}/${repo} - Token available: ${hasToken}, branch: ${ref || 'default'}`);
 
   // Prefer the /readme endpoint (returns base64 content + download_url)
   try {
     const url = `https://api.github.com/repos/${owner}/${repo}/readme${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`;
-    console.log(`Fetching README for ${owner}/${repo} from: ${url}${hasToken ? ' (with token)' : ' (no token)'}`);
+    console.log(`📡 Fetching README from: ${url}${hasToken ? ' (with token)' : ' (no token)'}`);
 
-    const res = await fetch(url, { headers: ghHeaders() });
+    const headers = ghHeaders();
+    console.log(`📋 Headers: ${JSON.stringify(headers)}`);
 
-    console.log(`GitHub API response status: ${res.status} for ${url}`);
+    const res = await fetch(url, { headers });
+
+    console.log(`📊 GitHub API response status: ${res.status} for ${url}`);
 
     if (res.status === 200) {
       const j = await res.json();
       const content = j.content ? Buffer.from(j.content, 'base64').toString('utf8') : '';
-      console.log(`Successfully fetched README for ${owner}/${repo}, content length: ${content.length}`);
+      console.log(`✅ Successfully fetched README for ${owner}/${repo}, content length: ${content.length}`);
       return { text: content, download_url: j.download_url, path: j.path };
     } else if (res.status === 403) {
       // If we hit rate limiting, throw a more specific error
@@ -202,44 +205,48 @@ async function fetchReadme(owner, repo, ref) {
       rateLimitError.isRateLimit = true;
       throw rateLimitError;
     } else if (res.status === 404) {
-      console.log(`README API endpoint returned 404 for ${owner}/${repo}, trying fallback methods...`);
+      console.log(`❌ README API endpoint returned 404 for ${owner}/${repo}, trying fallback methods...`);
       // Don't throw yet, try fallback methods
     } else {
-      console.log(`Unexpected status ${res.status} for README API endpoint ${owner}/${repo}`);
+      console.log(`⚠️ Unexpected status ${res.status} for README API endpoint ${owner}/${repo}`);
       // Try to get error details
       try {
         const errorText = await res.text();
-        console.log(`Error response body: ${errorText}`);
+        console.log(`❌ Error response body: ${errorText}`);
       } catch (e) {
-        console.log(`Could not read error response body: ${e.message}`);
+        console.log(`❌ Could not read error response body: ${e.message}`);
       }
     }
   } catch (error) {
     if (error.isRateLimit || error.message.includes('Rate limited')) {
       throw error; // Re-throw rate limit errors
     }
-    console.error(`Error fetching README via API endpoint for ${owner}/${repo}:`, error.message);
+    console.error(`❌ Error fetching README via API endpoint for ${owner}/${repo}:`, error.message);
   }
 
   // Enhanced fallback: try common README filenames directly
   const commonReadmeNames = ['README.md', 'README.txt', 'README', 'readme.md', 'readme.txt', 'README.rst', 'README.MD'];
+  console.log(`🔄 Trying ${commonReadmeNames.length} fallback methods for ${owner}/${repo}`);
 
   for (let i = 0; i < commonReadmeNames.length; i++) {
     const readmeName = commonReadmeNames[i];
     try {
       // Increase delay for each attempt to avoid rate limiting
       const delay = 200 + (i * 100);
+      console.log(`⏳ Waiting ${delay}ms before attempt ${i + 1}/${commonReadmeNames.length}`);
       await new Promise(resolve => setTimeout(resolve, delay));
 
       const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(readmeName)}${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`;
-      console.log(`Trying fallback README: ${url} (branch: ${ref || 'default'})`);
+      console.log(`🔍 Trying fallback ${i + 1}/${commonReadmeNames.length}: ${url}`);
 
       const res = await fetch(url, { headers: ghHeaders() });
+
+      console.log(`📊 Fallback ${i + 1} response status: ${res.status}`);
 
       if (res.status === 200) {
         const j = await res.json();
         const content = j.content ? Buffer.from(j.content, 'base64').toString('utf8') : '';
-        console.log(`Successfully fetched ${readmeName} for ${owner}/${repo}, content length: ${content.length}`);
+        console.log(`✅ Successfully fetched ${readmeName} for ${owner}/${repo}, content length: ${content.length}`);
         return { text: content, download_url: j.download_url, path: j.path };
       } else if (res.status === 403) {
         // If we hit rate limiting during fallback, throw a more specific error
@@ -247,13 +254,21 @@ async function fetchReadme(owner, repo, ref) {
         rateLimitError.isRateLimit = true;
         throw rateLimitError;
       } else if (res.status === 404) {
-        console.log(`Fallback ${readmeName} not found for ${owner}/${repo}`);
+        console.log(`❌ Fallback ${readmeName} not found for ${owner}/${repo} (404)`);
+      } else {
+        console.log(`⚠️ Unexpected status ${res.status} for fallback ${readmeName}`);
+        try {
+          const errorText = await res.text();
+          console.log(`❌ Fallback error response: ${errorText}`);
+        } catch (e) {
+          console.log(`❌ Could not read fallback error response: ${e.message}`);
+        }
       }
     } catch (error) {
       if (error.isRateLimit || error.message.includes('Rate limited')) {
         throw error; // Re-throw rate limit errors
       }
-      console.error(`Error fetching ${readmeName} for ${owner}/${repo}:`, error.message);
+      console.error(`❌ Error in fallback ${i + 1} for ${readmeName}:`, error.message);
     }
   }
 
@@ -837,12 +852,14 @@ export class SummarizerService {
   async summarizeFromGitHubUrl(githubUrl) {
     if (!githubUrl) throw new Error('githubUrl is required');
 
-    console.log(`Starting GitHub summarization for: ${githubUrl}`);
+    console.log(`🚀 Starting GitHub summarization for: ${githubUrl}`);
     const { owner, repo } = parseRepoUrl(githubUrl);
-    console.log(`Parsed repo: ${owner}/${repo}`);
+    console.log(`📋 Parsed repo: ${owner}/${repo}`);
 
     // Probe repo meta (required for basic info and branch detection)
+    console.log(`🔍 Fetching repository metadata...`);
     const meta = await fetchRepoMeta(owner, repo);
+    console.log(`📋 Repository metadata: ${JSON.stringify(meta)}`);
 
     // Try to get additional metadata, but don't fail if rate limited
     let latest_version = 'N/A';
@@ -862,7 +879,9 @@ export class SummarizerService {
     }
 
     // README (with fallback) and manifests - these are essential
+    console.log(`📖 Fetching README with branch: ${meta.default_branch}`);
     const readme = await fetchReadme(owner, repo, meta.default_branch);
+    console.log(`📖 README fetch result: ${JSON.stringify(readme)}`);
 
     try {
       requirementsTxt = await fetchOptionalText(owner, repo, 'requirements.txt', meta.default_branch);
